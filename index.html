@@ -3,10 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>duke's graphing calculator web/js version</title>
+    <title>duke's graphing calculator - systems edition</title>
     <style>
         :root {
             --accent: #00d4ff;
+            --accent-line1: #ff4d4d;
+            --accent-line2: #ffcc00;
             --bg: #0a0e14;
             --panel: #16212e;
         }
@@ -23,27 +25,69 @@
         /* Top UI Panel */
         #ui-layer {
             background: var(--panel);
-            padding: 20px;
+            padding: 15px 20px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
             border-bottom: 2px solid var(--accent);
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 15px;
             z-index: 10;
         }
+        .mode-container {
+            display: flex;
+            background: #05080a;
+            border: 1px solid #334a5e;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        .mode-btn {
+            background: transparent;
+            color: #7a9bb5;
+            border: none;
+            padding: 8px 15px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .mode-btn.active {
+            background: var(--accent);
+            color: var(--bg);
+            font-weight: bold;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-grow: 1;
+        }
+        .system-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex-grow: 1;
+        }
+        .system-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
         label {
             font-weight: bold;
             color: var(--accent);
-            font-size: 1.2rem;
+            font-size: 1.1rem;
+            white-space: nowrap;
         }
+        .line1-lbl { color: var(--accent-line1); }
+        .line2-lbl { color: var(--accent-line2); }
+
         input {
             background: #05080a;
             border: 1px solid #334a5e;
-            color: var(--accent);
-            padding: 10px 15px;
-            font-size: 1.2rem;
+            color: white;
+            padding: 8px 12px;
+            font-size: 1.1rem;
             border-radius: 5px;
-            flex-grow: 1;
             outline: none;
             transition: border 0.3s;
         }
@@ -51,17 +95,43 @@
             border-color: var(--accent);
             box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
         }
+        .standard-input { flex-grow: 1; color: var(--accent); }
+        .coeff-input { width: 60px; text-align: center; }
+        
         canvas {
             flex-grow: 1;
             touch-action: none;
         }
+        .hidden { display: none !important; }
     </style>
 </head>
 <body>
 
     <div id="ui-layer">
-        <label>f(x) = </label>
-        <input type="text" id="mathInput" placeholder="e.g. x**2 + 3*x + 2" autocomplete="off">
+        <div class="mode-container">
+            <button id="btnStandard" class="mode-btn active">Standard f(x)</button>
+            <button id="btnSystem" class="mode-btn">Linear System</button>
+        </div>
+
+        <div id="standardUi" class="input-group">
+            <label>f(x) = </label>
+            <input type="text" id="mathInput" class="standard-input" placeholder="e.g. x**2 + 3*x + 2" autocomplete="off">
+        </div>
+
+        <div id="systemUi" class="system-inputs hidden">
+            <div class="system-row">
+                <label class="line1-lbl">Line 1:</label>
+                <input type="number" id="a1" class="coeff-input" value="1" step="any"> <label class="line1-lbl">x</label> + 
+                <input type="number" id="b1" class="coeff-input" value="1" step="any"> <label class="line1-lbl">y</label> = 
+                <input type="number" id="c1" class="coeff-input" value="5" step="any">
+            </div>
+            <div class="system-row">
+                <label class="line2-lbl">Line 2:</label>
+                <input type="number" id="a2" class="coeff-input" value="1" step="any"> <label class="line2-lbl">x</label> - 
+                <input type="number" id="b2" class="coeff-input" value="1" step="any"> <label class="line2-lbl">y</label> = 
+                <input type="number" id="c2" class="coeff-input" value="1" step="any">
+            </div>
+        </div>
     </div>
 
     <canvas id="screen"></canvas>
@@ -69,14 +139,27 @@
     <script>
         const canvas = document.getElementById('screen');
         const ctx = canvas.getContext('2d');
+        
+        // UI Elements
+        const btnStandard = document.getElementById('btnStandard');
+        const btnSystem = document.getElementById('btnSystem');
+        const standardUi = document.getElementById('standardUi');
+        const systemUi = document.getElementById('systemUi');
         const mathInput = document.getElementById('mathInput');
 
-        let equation = "";
-        let cx, cy;
-        const step = 60; // Slightly larger zoom for visibility
-        let cached_points = [];
+        // Mode tracker: 'standard' or 'system'
+        let currentMode = 'standard';
 
-		function resize() {
+        let cx, cy;
+        const step = 60; 
+        
+        // Data Caches
+        let cached_points = [];      // Standard mode line
+        let cached_system_1 = [];    // System mode Line 1
+        let cached_system_2 = [];    // System mode Line 2
+        let intersection = null;     // Saved {x, y, mathX, mathY} data
+
+        function resize() {
             const dpr = window.devicePixelRatio || 1;
             canvas.width = canvas.clientWidth * dpr;
             canvas.height = canvas.clientHeight * dpr;
@@ -85,12 +168,11 @@
             cx = canvas.clientWidth / 2;
             cy = canvas.clientHeight / 2;
             
-            updateGraph(); // ADD THIS LINE HERE
+            updateGraph(); 
             render();
         }
 
         function sanitizeMath(str) {
-            // Logic: 3x -> 3*x, x2 -> x**2, ^ -> **
             let s = str.replace(/(\d)x/g, "$1*x");
             s = s.replace(/x(\d)/g, "x**$1");
             s = s.replace(/\^/g, "**");
@@ -98,26 +180,85 @@
         }
 
         function updateGraph() {
+            // Reset state
             cached_points = [];
-            equation = mathInput.value;
-            if (!equation) return;
+            cached_system_1 = [];
+            cached_system_2 = [];
+            intersection = null;
 
-            try {
-                const clean = sanitizeMath(equation);
-                const f = new Function('x', `return ${clean}`);
+            const mathRange = (canvas.clientWidth / 2) / step;
 
-                // Calculate points from left to right edge of screen
-                const mathRange = (canvas.clientWidth / 2) / step;
-                for (let x = -mathRange; x <= mathRange; x += 0.05) {
-                    let y = f(x);
-                    if (typeof y === 'number' && isFinite(y)) {
-                        cached_points.push({
-                            x: cx + (x * step),
-                            y: cy - (y * step)
-                        });
+            if (currentMode === 'standard') {
+                const equation = mathInput.value;
+                if (!equation) return;
+                try {
+                    const clean = sanitizeMath(equation);
+                    const f = new Function('x', `return ${clean}`);
+                    for (let x = -mathRange; x <= mathRange; x += 0.05) {
+                        let y = f(x);
+                        if (typeof y === 'number' && isFinite(y)) {
+                            cached_points.push({ x: cx + (x * step), y: cy - (y * step) });
+                        }
                     }
+                } catch (e) {}
+            } 
+            else if (currentMode === 'system') {
+                // Read standard form inputs: ax + by = c
+                const a1 = parseFloat(document.getElementById('a1').value) || 0;
+                const b1 = parseFloat(document.getElementById('b1').value) || 0;
+                const c1 = parseFloat(document.getElementById('c1').value) || 0;
+
+                const a2 = parseFloat(document.getElementById('a2').value) || 0;
+                const b2 = parseFloat(document.getElementById('b2').value) || 0;
+                const c2 = parseFloat(document.getElementById('c2').value) || 0;
+
+                // Helper to plot linear parameters safely across the grid range
+                const generateLinearPoints = (a, b, c) => {
+                    let pts = [];
+                    if (b !== 0) {
+                        // y = (c - ax) / b
+                        for (let x = -mathRange; x <= mathRange; x += 0.2) {
+                            let y = (c - a * x) / b;
+                            pts.push({ x: cx + (x * step), y: cy - (y * step) });
+                        }
+                    } else if (a !== 0) {
+                        // Vertical Line: x = c / a
+                        let fixedX = c / a;
+                        const yRange = (canvas.clientHeight / 2) / step;
+                        pts.push({ x: cx + (fixedX * step), y: cy - (-yRange * step) });
+                        pts.push({ x: cx + (fixedX * step), y: cy - (yRange * step) });
+                    }
+                    return pts;
+                };
+
+                cached_system_1 = generateLinearPoints(a1, b1, c1);
+                cached_system_2 = generateLinearPoints(a2, b2, c2);
+
+                // Cramer's Rule for Intersection System Solver
+                const D = a1 * b2 - b1 * a2;
+                if (D !== 0) {
+                    const ix = (c1 * b2 - b1 * c2) / D;
+                    const iy = (a1 * c2 - c1 * a2) / D;
+                    intersection = {
+                        x: cx + (ix * step),
+                        y: cy - (iy * step),
+                        mathX: ix.toFixed(2),
+                        mathY: iy.toFixed(2)
+                    };
                 }
-            } catch (e) { /* Invalid math string - ignore */ }
+            }
+        }
+
+        function drawGraphLine(points, color) {
+            if (points.length < 2) return;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.stroke();
         }
 
         function render() {
@@ -126,8 +267,6 @@
             // 1. Draw Grid Lines
             ctx.strokeStyle = "rgba(0, 212, 255, 0.05)";
             ctx.lineWidth = 1;
-            
-            // MATH FIX: Use floor to prevent generating coords outside the visible buffer
             const ticksX = Math.floor(cx / step);
             const ticksY = Math.floor(cy / step);
 
@@ -148,94 +287,108 @@
             ctx.moveTo(cx, 0); ctx.lineTo(cx, canvas.clientHeight);
             ctx.stroke();
 
-            // 3. Draw Ticks and Numbers (With Safe Zones)
+            // 3. Draw Ticks and Numbers
             ctx.fillStyle = "#00d4ff";
             ctx.font = "14px monospace";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
+            const edgePadding = 40;
 
-            const edgePadding = 40; // Pixels from the edge to keep clear for axis labels
-
-            // X-Axis Markings
             for (let i = -ticksX; i <= ticksX; i++) {
                 if (i === 0) continue;
                 let x = cx + i * step;
-                
-                // Bounds Check: Don't draw if it overlaps the screen edges
                 if (x < edgePadding || x > canvas.clientWidth - edgePadding) continue;
-
-                ctx.beginPath();
-                ctx.moveTo(x, cy - 5);
-                ctx.lineTo(x, cy + 5);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(x, cy - 5); ctx.lineTo(x, cy + 5); ctx.stroke();
                 ctx.fillText(i, x, cy + 20);
             }
-
-            // Y-Axis Markings
             ctx.textAlign = "right";
             for (let i = -ticksY; i <= ticksY; i++) {
                 if (i === 0) continue;
                 let y = cy - i * step; 
-                
-                // Bounds Check: Don't draw if it overlaps the top or bottom edges
                 if (y < edgePadding || y > canvas.clientHeight - edgePadding) continue;
-
-                ctx.beginPath();
-                ctx.moveTo(cx - 5, y);
-                ctx.lineTo(cx + 5, y);
-                ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(cx - 5, y); ctx.lineTo(cx + 5, y); ctx.stroke();
                 ctx.fillText(i, cx - 12, y);
             }
-
             ctx.fillText("0", cx - 8, cy + 15);
 
-            // 4. Draw Axis Labels (Dynamically clamped to the frame limits)
+            // 4. Draw Axis Labels
             ctx.font = "bold 20px monospace";
             ctx.fillStyle = "#00d4ff";
-            
-            // x (Far Right)
-            ctx.textAlign = "right";
-            ctx.fillText("x", canvas.clientWidth - 15, cy - 15);
-            
-            // x' (Far Left)
-            ctx.textAlign = "left";
-            ctx.fillText("x'", 15, cy - 15);
-            
-            // y (Top)
-            ctx.textAlign = "left";
-            ctx.fillText("y", cx + 15, 25);
-            
-            // y' (Bottom)
-            ctx.textAlign = "left";
-            ctx.fillText("y'", cx + 15, canvas.clientHeight - 15);
+            ctx.textAlign = "right"; ctx.fillText("x", canvas.clientWidth - 15, cy - 15);
+            ctx.textAlign = "left";  ctx.fillText("x'", 15, cy - 15);
+            ctx.textAlign = "left";  ctx.fillText("y", cx + 15, 25);
+            ctx.textAlign = "left";  ctx.fillText("y'", cx + 15, canvas.clientHeight - 15);
 
-            // 5. Draw the Graph
-            if (cached_points.length > 1) {
+            // 5. Draw Graphs depending on the Active Mode
+            if (currentMode === 'standard') {
                 ctx.shadowBlur = 12;
                 ctx.shadowColor = "#00d4ff";
-                ctx.strokeStyle = "#ffffff";
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(cached_points[0].x, cached_points[0].y);
-                for (let i = 1; i < cached_points.length; i++) {
-                    ctx.lineTo(cached_points[i].x, cached_points[i].y);
+                drawGraphLine(cached_points, "#ffffff");
+                ctx.shadowBlur = 0;
+            } 
+            else if (currentMode === 'system') {
+                // Draw Line 1 (Red Accent)
+                ctx.shadowBlur = 8; ctx.shadowColor = "#ff4d4d";
+                drawGraphLine(cached_system_1, "#ff4d4d");
+                
+                // Draw Line 2 (Yellow Accent)
+                ctx.shadowColor = "#ffcc00";
+                drawGraphLine(cached_system_2, "#ffcc00");
+                ctx.shadowBlur = 0;
+
+                // Draw Intersect Node Highlight Vector Point
+                if (intersection) {
+                    ctx.fillStyle = "#00d4ff";
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(intersection.x, intersection.y, 7, 0, 2 * Math.PI);
+                    ctx.fill();
+                    ctx.stroke();
+
+                    // Text Coordinates Tag
+                    ctx.fillStyle = "#ffffff";
+                    ctx.font = "bold 14px sans-serif";
+                    ctx.textAlign = "left";
+                    ctx.fillText(` (${intersection.mathX}, ${intersection.mathY})`, intersection.x + 10, intersection.y - 10);
                 }
-                ctx.stroke();
-                ctx.shadowBlur = 0; 
             }
         }
 
-		// THIS IS THE MISSING LINK! 
-        // It tells JS to update the graph every time you press a key.
-        mathInput.addEventListener('input', () => {
+        // Mode Switching Logic
+        btnStandard.addEventListener('click', () => {
+            currentMode = 'standard';
+            btnStandard.classList.add('active');
+            btnSystem.classList.remove('active');
+            standardUi.classList.remove('hidden');
+            systemUi.classList.add('hidden');
             updateGraph();
             render();
         });
 
+        btnSystem.addEventListener('click', () => {
+            currentMode = 'system';
+            btnSystem.classList.add('active');
+            btnStandard.classList.remove('active');
+            systemUi.classList.remove('hidden');
+            standardUi.classList.add('hidden');
+            updateGraph();
+            render();
+        });
+
+        // Event Listeners for UI interaction updates
+        mathInput.addEventListener('input', () => {
+            if(currentMode === 'standard') { updateGraph(); render(); }
+        });
+
+        document.querySelectorAll('.coeff-input').forEach(input => {
+            input.addEventListener('input', () => {
+                if(currentMode === 'system') { updateGraph(); render(); }
+            });
+        });
+
         window.addEventListener('resize', resize);
-        
-        // Initial setup
-        resize();
+        resize(); // Core engine initialization trigger
     </script>
 </body>
 </html>
